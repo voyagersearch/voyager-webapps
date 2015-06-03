@@ -20,7 +20,7 @@ limitations under the License.
 
 <head>
     
-  <title>Solr Admin</title>
+  <title>Voyager Solr Admin</title>
     
   <link rel="icon" type="image/x-icon" href="img/favicon.ico?_=${version}">
   <link rel="shortcut icon" type="image/x-icon" href="img/favicon.ico?_=${version}">
@@ -51,8 +51,8 @@ limitations under the License.
     
   var app_config = {};
     
-  app_config.solr_path = '${contextPath}';
-  app_config.core_admin_path = '${adminPath}';
+  app_config.solr_path = '../solr'; // hack around relative path issue
+  app_config.core_admin_path = '/admin/cores';
     
   </script>
     
