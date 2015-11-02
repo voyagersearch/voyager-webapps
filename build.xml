@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<project name="webapps" default="build" basedir=".">
+
+  <description>
+    Build the webapps
+  </description>
+
+  <tstamp>
+    <format property="touch.time" pattern="MM/dd/yyyy hh:mm aa"/>
+  </tstamp>
+
+  <property environment="env" />
+  <property name="env.BUILD_NUMBER" value="unknown" />
+  <property name="version" value="1.9.8.${env.BUILD_NUMBER}"/>
+
+  <target name="clean">
+    <delete dir="dist"/>
+  </target>
+
+  <target name="build" depends="clean">
+    <mkdir dir="dist"/>
+    <copy todir="dist">
+      <fileset dir="." includes="**/*" excludes="dist build.xml"/>
+    </copy>
+
+    <!-- will replace 'version' in solr index -->
+    <replace file="dist/solr/index.html">
+      <replacefilter token="$${version}" value="${version}"/>
+    </replace>
+  </target>
+</project>
