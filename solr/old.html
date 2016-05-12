@@ -20,8 +20,11 @@ limitations under the License.
 
 <head>
     
-  <title>Voyager Solr Admin</title>
+  <title>Solr Admin</title>
     
+  <link rel="icon" type="image/x-icon" href="img/favicon.ico?_=${version}">
+  <link rel="shortcut icon" type="image/x-icon" href="img/favicon.ico?_=${version}">
+
   <link rel="stylesheet" type="text/css" href="css/styles/common.css?_=${version}">
   <link rel="stylesheet" type="text/css" href="css/styles/analysis.css?_=${version}">
   <link rel="stylesheet" type="text/css" href="css/styles/cloud.css?_=${version}">
@@ -39,6 +42,7 @@ limitations under the License.
   <link rel="stylesheet" type="text/css" href="css/styles/replication.css?_=${version}">
   <link rel="stylesheet" type="text/css" href="css/styles/schema-browser.css?_=${version}">
   <link rel="stylesheet" type="text/css" href="css/styles/threads.css?_=${version}">
+  <link rel="stylesheet" type="text/css" href="css/styles/segments.css?_=${version}">
   <link rel="stylesheet" type="text/css" href="css/chosen.css?_=${version}">
 
   <meta http-equiv="x-ua-compatible" content="IE=9">
@@ -47,8 +51,8 @@ limitations under the License.
     
   var app_config = {};
     
-  app_config.solr_path = '../solr'; // hack around relative path issue
-  app_config.core_admin_path = '/admin/corez';
+  app_config.solr_path = '${contextPath}';
+  app_config.core_admin_path = '${adminPath}';
     
   </script>
     
@@ -73,6 +77,11 @@ limitations under the License.
           <ul></ul>
           <p>Please check your logs for more information</p>
                 
+      </div>
+
+      <div class="old-ui-warning">
+        THIS USER INTERFACE IS DEPRECATED. Please use the current UI <a class="ul" href="/solr/">here</a>
+        <a target="_blank" href="http://wiki.apache.org/solr/AngularUI">&nbsp;<span class="help"></span></a>
       </div>
 
       <div id="content-wrapper">
@@ -135,9 +144,9 @@ limitations under the License.
                     
           <li class="documentation"><a href="http://lucene.apache.org/solr/"><span>Documentation</span></a></li>
           <li class="issues"><a href="http://issues.apache.org/jira/browse/SOLR"><span>Issue Tracker</span></a></li>
-          <li class="irc"><a href="http://webchat.freenode.net/?channels=#solr"><span>IRC Channel</span></a></li>
-          <li class="mailinglist"><a href="http://wiki.apache.org/solr/UsingMailingLists"><span>Community forum</span></a></li>
-          <li class="wiki-query-syntax"><a href="http://wiki.apache.org/solr/SolrQuerySyntax"><span>Solr Query Syntax</span></a></li>
+          <li class="irc"><a href="https://wiki.apache.org/solr/IRCChannels"><span>IRC Channel</span></a></li>
+          <li class="mailinglist"><a href="http://lucene.apache.org/solr/resources.html#community"><span>Community forum</span></a></li>
+          <li class="wiki-query-syntax"><a href="https://cwiki.apache.org/confluence/display/solr/Query+Syntax+and+Parsing"><span>Solr Query Syntax</span></a></li>
                     
         </ul>
                 
