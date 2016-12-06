@@ -109,6 +109,10 @@ solrAdminApp.config([
         templateUrl: 'partials/query.html',
         controller: 'QueryController'
       }).
+      when('/:core/stream', {
+        templateUrl: 'partials/stream.html',
+        controller: 'StreamController'
+      }).
       when('/:core/replication', {
         templateUrl: 'partials/replication.html',
         controller: 'ReplicationController'
@@ -144,7 +148,7 @@ solrAdminApp.config([
 })
 .filter('highlight', function($sce) {
   return function(input, lang) {
-    if (lang && input && lang!="text") return hljs.highlight(lang, input).value;
+    if (lang && input && lang!="txt") return hljs.highlight(lang, input).value;
     return input;
   }
 })
