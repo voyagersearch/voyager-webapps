@@ -15,21 +15,68 @@
  limitations under the License.
 */
 
+/* SOLR-14120: Providing a manual definition for the methods 'includes' and 'startsWith' to support Internet Explorer 11. */
+if (!String.prototype.includes) {
+  String.prototype.includes = function(search, start) { 'use strict';
+  if (search instanceof RegExp) {
+    throw TypeError('first argument must not be a RegExp');
+  } 
+  if (start === undefined) { start = 0; }
+    return this.indexOf(search, start) !== -1;
+  };
+}
+if (!Array.prototype.includes) {
+  Object.defineProperty(Array.prototype, "includes", {
+    enumerable: false,
+    value: function(obj) {
+    var newArr = this.filter(function(el) {
+      return el == obj;
+    });
+    return newArr.length > 0;
+    }
+  });
+}
+if (!String.prototype.startsWith) {
+  Object.defineProperty(String.prototype, 'startsWith', {
+    value: function(search, rawPos) {
+    var pos = rawPos > 0 ? rawPos|0 : 0;
+    return this.substring(pos, pos + search.length) === search;
+    }
+  });
+}
+
 var solrAdminApp = angular.module("solrAdminApp", [
   "ngResource",
   "ngRoute",
   "ngCookies",
   "ngtimeago",
   "solrAdminServices",
-  "localytics.directives"
+  "localytics.directives",
+  "ab-base64"
 ]);
 
 solrAdminApp.config([
+  '$locationProvider', function($locationProvider) {
+    $locationProvider.hashPrefix('');
+}])
+.config([
   '$routeProvider', function($routeProvider) {
     $routeProvider.
       when('/', {
         templateUrl: 'partials/index.html',
         controller: 'IndexController'
+      }).
+      when('/unknown', {
+        templateUrl: 'partials/unknown.html',
+        controller: 'UnknownController'
+      }).
+      when('/login', {
+        templateUrl: 'partials/login.html',
+        controller: 'LoginController'
+      }).
+      when('/login/:route', {
+        templateUrl: 'partials/login.html',
+        controller: 'LoginController'
       }).
       when('/~logging', {
         templateUrl: 'partials/logging.html',
@@ -67,9 +114,17 @@ solrAdminApp.config([
         templateUrl: 'partials/java-properties.html',
         controller: 'JavaPropertiesController'
       }).
-      when('/:core', {
+      when('/~cluster-suggestions', {
+        templateUrl: 'partials/cluster_suggestions.html',
+        controller: 'ClusterSuggestionsController'
+      }).
+      when('/:core/core-overview', {
         templateUrl: 'partials/core_overview.html',
         controller: 'CoreOverviewController'
+      }).
+      when('/:core/alias-overview', {
+        templateUrl: 'partials/alias_overview.html',
+        controller: 'AliasOverviewController'
       }).
       when('/:core/collection-overview', {
         templateUrl: 'partials/collection_overview.html',
@@ -133,8 +188,17 @@ solrAdminApp.config([
         templateUrl: 'partials/segments.html',
         controller: 'SegmentsController'
       }).
+      when('/~schema-designer', {
+        templateUrl: 'partials/schema-designer.html',
+        controller: 'SchemaDesignerController'
+      }).
+      when('/~security', {
+        templateUrl: 'partials/security.html',
+        controller: 'SecurityController'
+      }).
       otherwise({
-        redirectTo: '/'
+        templateUrl: 'partials/unknown.html',
+        controller: 'UnknownController'
       });
 }])
 .constant('Constants', {
@@ -275,24 +339,26 @@ solrAdminApp.config([
         },
         link: function(scope, element, attrs) {
             scope.$watch("data", function(newValue, oldValue) {
-                if (newValue) {
+              if (newValue && !jQuery.isEmptyObject(newValue)) {
                   var treeConfig = {
-                      "plugins" : [ "themes", "json_data", "ui" ],
-                      "json_data" : {
-                        "data" : scope.data,
-                        "progressive_render" : true
-                      },
-                      "core" : {
-                        "animation" : 0
-                      }
+                    'core' : {
+                      'animation' : 0,
+                      'worker': false
+                    }
                   };
 
                   var tree = $(element).jstree(treeConfig);
-                  tree.jstree('open_node','li:first');
+
+                  // This is done to ensure that the data can be refreshed if it is updated behind the scenes.
+                  // Putting the data in the treeConfig makes it stack and doesn't update.
+                  $(element).jstree(true).settings.core.data = scope.data;
+                  $(element).jstree(true).refresh();
+
+                  $(element).jstree('open_node','li:first');
                   if (tree) {
                       element.bind("select_node.jstree", function (event, data) {
                           scope.$apply(function() {
-                              scope.onSelect({url: data.args[0].href, data: data});
+                            scope.onSelect({url: data.node.a_attr.href, data: data});
                           });
                       });
                   }
@@ -311,7 +377,7 @@ solrAdminApp.config([
     }
   };
 })
-.factory('httpInterceptor', function($q, $rootScope, $timeout, $injector) {
+.factory('httpInterceptor', function($q, $rootScope, $location, $timeout, $injector) {
   var activeRequests = 0;
 
   var started = function(config) {
@@ -322,7 +388,12 @@ solrAdminApp.config([
       delete $rootScope.exceptions[config.url];
     }
     activeRequests++;
-    config.timeout = 10000;
+    if (sessionStorage.getItem("auth.header")) {
+      config.headers['Authorization'] = sessionStorage.getItem("auth.header");
+    }
+    if (!config.timeout) {
+      config.timeout = 10000;
+    }
     return config || $q.when(config);
   };
 
@@ -339,6 +410,11 @@ solrAdminApp.config([
         $rootScope.$broadcast('connectionStatusInactive');
       },2000);
     }
+    if (!$location.path().startsWith('/login') && !$location.path().startsWith('/unknown')) {
+      sessionStorage.removeItem("http401");
+      sessionStorage.removeItem("auth.state");
+      sessionStorage.removeItem("auth.statusText");
+    }
     return response || $q.when(response);
   };
 
@@ -350,6 +426,12 @@ solrAdminApp.config([
     if (rejection.config.headers.doNotIntercept) {
         return rejection;
     }
+
+    // Some page controllers, such as Schema Designer, handle errors internally to provide a better user experience than the global error handler
+    var isHandledByPageController =
+        (rejection.config.url && rejection.config.url.startsWith("/api/schema-designer/")) ||
+        (rejection.status === 403 && $location.path() === "/~security");
+
     if (rejection.status === 0) {
       $rootScope.$broadcast('connectionStatusActive');
       if (!$rootScope.retryCount) $rootScope.retryCount=0;
@@ -357,16 +439,46 @@ solrAdminApp.config([
       var $http = $injector.get('$http');
       var result = $http(rejection.config);
       return result;
+    } else if (rejection.status === 401 && !isHandledByPageController) {
+      // Authentication redirect
+      var headers = rejection.headers();
+      var wwwAuthHeader = headers['www-authenticate'];
+      sessionStorage.setItem("auth.wwwAuthHeader", wwwAuthHeader);
+      sessionStorage.setItem("auth.authDataHeader", headers['x-solr-authdata']);
+      sessionStorage.setItem("auth.statusText", rejection.statusText);
+      sessionStorage.setItem("http401", "true");
+      sessionStorage.removeItem("auth.scheme");
+      sessionStorage.removeItem("auth.realm");
+      sessionStorage.removeItem("auth.username");
+      sessionStorage.removeItem("auth.header");
+      sessionStorage.removeItem("auth.state");
+      if ($location.path().includes('/login')) {
+        if (!sessionStorage.getItem("auth.location")) {
+          sessionStorage.setItem("auth.location", "/");
+        }
+      } else {
+        sessionStorage.setItem("auth.location", $location.path());
+        $location.path('/login');
+      }
     } else {
-      $rootScope.exceptions[rejection.config.url] = rejection.data.error;
+      // some controllers prefer to handle errors internally
+      if (!isHandledByPageController) {
+        if (rejection.data.error) {
+          $rootScope.exceptions[rejection.config.url] = rejection.data.error;
+        } else if (rejection.data.message) {
+          $rootScope.exceptions[rejection.config.url] = {msg:rejection.data.message+" from "+rejection.data.url};
+        }
+      }
     }
     return $q.reject(rejection);
-  }
+  };
 
   return {request: started, response: ended, responseError: failed};
 })
 .config(function($httpProvider) {
   $httpProvider.interceptors.push("httpInterceptor");
+  // Force BasicAuth plugin to serve us a 'Authorization: xBasic xxxx' header so browser will not pop up login dialogue
+  $httpProvider.defaults.headers.common['X-Requested-With'] = 'XMLHttpRequest';
 })
 .directive('fileModel', function ($parse) {
     return {
@@ -384,7 +496,7 @@ solrAdminApp.config([
     };
 });
 
-solrAdminApp.controller('MainController', function($scope, $route, $rootScope, $location, Cores, Collections, System, Ping, Constants) {
+solrAdminApp.controller('MainController', function($scope, $route, $rootScope, $location, Cores, Collections, System, Ping, Constants, SchemaDesigner) {
 
   $rootScope.exceptions={};
 
@@ -395,6 +507,7 @@ solrAdminApp.controller('MainController', function($scope, $route, $rootScope, $
   $scope.refresh = function() {
       $scope.cores = [];
       $scope.collections = [];
+      $scope.aliases = [];
   }
 
   $scope.refresh();
@@ -405,6 +518,9 @@ solrAdminApp.controller('MainController', function($scope, $route, $rootScope, $
       delete $scope.currentCore;
       for (key in data.status) {
         var core = data.status[key];
+        if (core.name.startsWith("._designer_")) {
+          continue;
+        }
         $scope.cores.push(core);
         if ((!$scope.isSolrCloud || pageType == Constants.IS_CORE_PAGE) && core.name == currentCoreName) {
             $scope.currentCore = core;
@@ -414,29 +530,79 @@ solrAdminApp.controller('MainController', function($scope, $route, $rootScope, $
       $scope.initFailures = data.initFailures;
     });
 
+    $scope.isSchemaDesignerEnabled = true;
     System.get(function(data) {
       $scope.isCloudEnabled = data.mode.match( /solrcloud/i );
 
+      var currentCollectionName = $route.current.params.core;
+      delete $scope.currentCollection;
       if ($scope.isCloudEnabled) {
-        Collections.list(function (data) {
-          $scope.collections = [];
-          var currentCollectionName = $route.current.params.core;
-          delete $scope.currentCollection;
-          for (key in data.collections) {
-            var collection = {name: data.collections[key]};
-            $scope.collections.push(collection);
-            if (pageType == Constants.IS_COLLECTION_PAGE && collection.name == currentCollectionName) {
-              $scope.currentCollection = collection;
+        Collections.list(function (cdata) {
+          Collections.listaliases(function (adata) {
+            $scope.aliases = [];
+            for (var key in adata.aliases) {
+              props = {};
+              if (key in adata.properties) {
+                props = adata.properties[key];
+              }
+              var alias = {name: key, collections: adata.aliases[key], type: 'alias', properties: props};
+              $scope.aliases.push(alias);
+              if (pageType == Constants.IS_COLLECTION_PAGE && alias.name == currentCollectionName) {
+                $scope.currentCollection = alias;
+              }
             }
-          }
-        })
+            $scope.collections = [];
+            for (key in cdata.collections) {
+              if (cdata.collections[key].startsWith("._designer_")) {
+                continue; // ignore temp designer collections
+              }
+              var collection = {name: cdata.collections[key], type: 'collection'};
+              $scope.collections.push(collection);
+              if (pageType == Constants.IS_COLLECTION_PAGE && collection.name == currentCollectionName) {
+                $scope.currentCollection = collection;
+              }
+            }
+
+            $scope.aliases_and_collections = $scope.aliases;
+            if ($scope.aliases.length > 0) {
+              $scope.aliases_and_collections = $scope.aliases_and_collections.concat({name:'-----'});
+            }
+            $scope.aliases_and_collections = $scope.aliases_and_collections.concat($scope.collections);
+
+            SchemaDesigner.get({path: "configs"}, function (ignore) {
+              // no-op, just checking if we have access to this path
+            }, function(e) {
+              if (e.status === 401 || e.status === 403) {
+                $scope.isSchemaDesignerEnabled = false;
+              }
+            });
+          });
+        });
       }
 
+      $scope.showEnvironment = data.environment !== undefined;
+      if (data.environment) {
+        $scope.environment = data.environment;
+        var env_labels = {'prod': 'Production', 'stage': 'Staging', 'test': 'Test', 'dev': 'Development'};
+        $scope.environment_label = env_labels[data.environment];
+        if (data.environment_label) {
+          $scope.environment_label = data.environment_label;
+        }
+        if (data.environment_color) {
+          $scope.environment_color = data.environment_color;
+        }
+      }
     });
 
     $scope.showingLogging = page.lastIndexOf("logging", 0) === 0;
     $scope.showingCloud = page.lastIndexOf("cloud", 0) === 0;
     $scope.page = page;
+    $scope.currentUser = sessionStorage.getItem("auth.username");
+    $scope.http401 = sessionStorage.getItem("http401");
+  };
+
+  $scope.isMultiDestAlias = function(selectedColl) {
+    return selectedColl && selectedColl.type === 'alias' && selectedColl.collections.includes(',');
   };
 
   $scope.ping = function() {
@@ -452,348 +618,18 @@ solrAdminApp.controller('MainController', function($scope, $route, $rootScope, $
   }
 
   $scope.showCore = function(core) {
-    $location.url("/" + core.name);
+    $location.url("/" + core.name + "/core-overview");
   }
 
   $scope.showCollection = function(collection) {
-    $location.url("/" + collection.name + "/collection-overview")
-  }
+    if (collection.type === 'collection') {
+      $location.url("/" + collection.name + "/collection-overview")
+    } else if (collection.type === 'alias') {
+      $location.url("/" + collection.name + "/alias-overview")
+    }
+  };
 
   $scope.$on('$routeChangeStart', function() {
       $rootScope.exceptions = {};
   });
 });
-
-
-(function(window, angular, undefined) {
-  'use strict';
-
-  angular.module('ngClipboard', []).
-    provider('ngClip', function() {
-      var self = this;
-      this.path = '//cdnjs.cloudflare.com/ajax/libs/zeroclipboard/2.1.6/ZeroClipboard.swf';
-      return {
-        setPath: function(newPath) {
-         self.path = newPath;
-        },
-        setConfig: function(config) {
-          self.config = config;
-        },
-        $get: function() {
-          return {
-            path: self.path,
-            config: self.config
-          };
-        }
-      };
-    }).
-    run(['ngClip', function(ngClip) {
-      var config = {
-        swfPath: ngClip.path,
-        trustedDomains: ["*"],
-        allowScriptAccess: "always",
-        forceHandCursor: true,
-      };
-      ZeroClipboard.config(angular.extend(config,ngClip.config || {}));
-    }]).
-    directive('clipCopy', ['ngClip', function (ngClip) {
-      return {
-        scope: {
-          clipCopy: '&',
-          clipClick: '&',
-          clipClickFallback: '&'
-        },
-        restrict: 'A',
-        link: function (scope, element, attrs) {
-          // Bind a fallback function if flash is unavailable
-          if (ZeroClipboard.isFlashUnusable()) {
-            element.bind('click', function($event) {
-              // Execute the expression with local variables `$event` and `copy`
-              scope.$apply(scope.clipClickFallback({
-                $event: $event,
-                copy: scope.$eval(scope.clipCopy)
-              }));
-            });
-
-            return;
-          }
-
-          // Create the client object
-          var client = new ZeroClipboard(element);
-          if (attrs.clipCopy === "") {
-            scope.clipCopy = function(scope) {
-              return element[0].previousElementSibling.innerText;
-            };
-          }
-          client.on( 'ready', function(readyEvent) {
-
-            client.on('copy', function (event) {
-              var clipboard = event.clipboardData;
-              clipboard.setData(attrs.clipCopyMimeType || 'text/plain', scope.$eval(scope.clipCopy));
-            });
-
-            client.on( 'aftercopy', function(event) {
-              if (angular.isDefined(attrs.clipClick)) {
-                scope.$apply(scope.clipClick);
-              }
-            });
-
-            scope.$on('$destroy', function() {
-              client.destroy();
-            });
-          });
-        }
-      };
-    }]);
-})(window, window.angular);
-
-
-/* THE BELOW CODE IS TAKEN FROM js/scripts/app.js, AND STILL REQUIRES INTEGRATING
-
-
-// @todo clear timeouts
-
-    // activate_core
-    this.before
-    (
-      {},
-      function( context )
-      {
-
-        var menu_wrapper = $( '#menu-wrapper' );
-
-        // global dashboard doesn't have params.splat
-        if( !this.params.splat )
-        {
-          this.params.splat = [ '~index' ];
-        }
-
-        var selector = '~' === this.params.splat[0][0]
-                     ? '#' + this.params.splat[0].replace( /^~/, '' ) + '.global'
-                     : '#core-selector #' + this.params.splat[0].replace( /\./g, '__' );
-
-        var active_element = $( selector, menu_wrapper );
-
-        // @todo "There is no core with this name"
-
-        if( active_element.hasClass( 'global' ) )
-        {
-          active_element
-            .addClass( 'active' );
-
-          if( this.params.splat[1] )
-          {
-            $( '.' + this.params.splat[1], active_element )
-              .addClass( 'active' );
-          }
-
-          $( '#core-selector option[selected]' )
-            .removeAttr( 'selected' )
-            .trigger( 'liszt:updated' );
-
-          $( '#core-selector .chzn-container > a' )
-            .addClass( 'chzn-default' );
-        }
-        else
-        {
-          active_element
-            .attr( 'selected', 'selected' )
-            .trigger( 'liszt:updated' );
-
-
-          $( '#core-menu .' + this.params.splat[1] )
-            .addClass( 'active' );
-
-      }
-    );
-  }
-);
-
-var solr_admin = function( app_config )
-{
-  this.menu_element = $( '#core-selector select' );
-  this.core_menu = $( '#core-menu ul' );
-
-  this.config = config;
-  this.timeout = null;
-
-  this.core_regex_base = '^#\\/([\\w\\d-\\.]+)';
-
-  show_global_error = function( error )
-  {
-    var main = $( '#main' );
-
-    $( 'div[id$="-wrapper"]', main )
-      .remove();
-
-    main
-      .addClass( 'error' )
-      .append( error );
-
-    var pre_tags = $( 'pre', main );
-    if( 0 !== pre_tags.size() )
-    {
-      hljs.highlightBlock( pre_tags.get(0) );
-    }
-  };
-
-  sort_cores_data = function sort_cores_data( cores_status )
-  {
-    // build array of core-names for sorting
-    var core_names = [];
-    for( var core_name in cores_status )
-    {
-      core_names.push( core_name );
-    }
-    core_names.sort();
-
-    var core_count = core_names.length;
-    var cores = {};
-
-    for( var i = 0; i < core_count; i++ )
-    {
-      var core_name = core_names[i];
-      cores[core_name] = cores_status[core_name];
-    }
-
-    return cores;
-  };
-
-  this.set_cores_data = function set_cores_data( cores )
-  {
-    that.cores_data = sort_cores_data( cores.status );
-
-    that.menu_element
-      .empty();
-
-    var core_list = [];
-    core_list.push( '<option></option>' );
-
-    var core_count = 0;
-    for( var core_name in that.cores_data )
-    {
-      core_count++;
-      var core_path = config.solr_path + '/' + core_name;
-      var classes = [];
-
-      if( cores.status[core_name]['isDefaultCore'] )
-      {
-        classes.push( 'default' );
-      }
-
-      var core_tpl = '<option '
-                   + '    id="' + core_name.replace( /\./g, '__' ) + '" '
-                   + '    class="' + classes.join( ' ' ) + '"'
-                   + '    data-basepath="' + core_path + '"'
-                   + '    schema="' + cores.status[core_name]['schema'] + '"'
-                   + '    config="' + cores.status[core_name]['config'] + '"'
-                   + '    value="#/' + core_name + '"'
-                   + '    title="' + core_name + '"'
-                   + '>'
-                   + core_name
-                   + '</option>';
-
-      core_list.push( core_tpl );
-    }
-
-    var has_cores = 0 !== core_count;
-    if( has_cores )
-    {
-      that.menu_element
-        .append( core_list.join( "\n" ) )
-        .trigger( 'liszt:updated' );
-    }
-
-    var core_selector = $( '#core-selector' );
-
-    if( has_cores )
-    {
-      var cores_element = core_selector.find( '#has-cores' );
-      var selector_width = cores_element.width();
-
-      cores_element.find( '.chzn-container' )
-        .css( 'width', selector_width + 'px' );
-
-      cores_element.find( '.chzn-drop' )
-        .css( 'width', ( selector_width - 2 ) + 'px' );
-    }
-  };
-
-  this.run = function()
-  {
-    $.ajax
-    (
-      {
-        // load cores (indexInfo = false
-        success : function( response )
-        {
-
-          var system_url = config.solr_path + '/admin/info/system?wt=json';
-          $.ajax
-          (
-            {
-              url : system_url,
-              dataType : 'json',
-              beforeSend : function( arr, form, options )
-              {
-              },
-              success : function( response )
-              {
-                that.dashboard_values = response;
-
-                var environment_args = null;
-                var cloud_args = null;
-
-                if( response.jvm && response.jvm.jmx && response.jvm.jmx.commandLineArgs )
-                {
-                  var command_line_args = response.jvm.jmx.commandLineArgs.join( ' | ' );
-
-                  environment_args = command_line_args.match( /-Dsolr.environment=((dev|test|prod)?[\w\d]*)/i );
-                }
-
-// @todo detect $scope.isCloud = response.mode.match( /solrcloud/i );
-
-                // environment
-
-                var wrapper = $( '#wrapper' );
-                var environment_element = $( '#environment' );
-                if( environment_args )
-                {
-                  wrapper
-                    .addClass( 'has-environment' );
-
-                  if( environment_args[1] )
-                  {
-                    environment_element
-                      .html( environment_args[1] );
-                  }
-
-                  if( environment_args[2] )
-                  {
-                    environment_element
-                      .addClass( environment_args[2] );
-                  }
-                }
-                else
-                {
-                  wrapper
-                    .removeClass( 'has-environment' );
-                }
-
-                // cloud
-
-                var cloud_nav_element = $( '#menu #cloud' );
-                if( cloud_args )
-                {
-                  cloud_nav_element
-                    .show();
-                }
-
-                // sammy
-
-                sammy.run( location.hash );
-              },
-              error : function()
-              {
-  };
-*/
